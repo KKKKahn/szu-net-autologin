@@ -292,7 +292,7 @@ sr_s() {
   for ((i = 0; i < ${#original_string}; i++)); do
     char=${original_string:$i:1}
     ascii_code=$(( $(printf '%d' "'$char") ))
-    a+=("$ascii")
+    a+=("$ascii_code")
   done
   local combined_array=()
   local j num result
@@ -537,7 +537,7 @@ else
     exit 0                          # 深澜确认在线
   fi
   if [[ -z "$state" ]]; then
-    online && exit 0                # 状态接口不可达 → 公网探针兜底确认
+    online && exit 0                # 状态接口不可达 → 公网探针兜底
   fi                                # not_online_error 或兜底也失败 → 继续登录
 fi
 
