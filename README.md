@@ -1,0 +1,301 @@
+# szu-net-autologin
+
+**校园网断网自动重连工具(深圳大学宿舍区 + 教学区双区适配)**
+
+合盖再开、睡眠唤醒、会话超时后,**无需打开浏览器、无需输入账号密码**,后台自动完成校园网网页认证,1 分钟内恢复上网。
+
+> **平台支持**
+>
+> | 平台 | 支持情况 |
+> |---|---|
+> | **macOS** | ✅ 完整支持,宿舍区 + 教学区均已实测通过 |
+> | **Windows** | ⏳ 计划中(需要 Windows 真机联调,欢迎 PR;见文末路线图) |
+
+> 一句话原理:一个小脚本定期检查网络(默认 15 秒,可在 plist 中按需调整),发现掉线就替你向认证服务器"点一次登录按钮"——账号密码只存在你本机的钥匙串里。
+
+---
+
+## ✨ 功能特性
+
+- 🔄 **全自动重连**:断网后自动模拟网页登录,无需任何手动操作
+- 🧭 **双区智能识别**:自动判断你在宿舍区还是教学区,走对应的认证协议
+- 🔐 **凭据零落盘**:账号密码只存 macOS 钥匙串(系统级加密),脚本文件里没有任何敏感信息
+- 🤫 **零打扰**:不弹窗、不开浏览器、不启动任何 GUI 程序;连非校园网 WiFi(热点/家庭网络)时自动静默
+- 🛡️ **礼貌且安全**:登录失败有 100 秒冷却,不会疯狂重试骚扰认证服务器
+- ⚡ **几乎零开销**:每轮检测耗时约 0.1~0.3 秒,睡眠期间完全不运行
+
+## 🎯 解决什么问题
+
+Mac 合盖休眠后再打开,校园网会失效,需要重新登录。本脚本自动完成重连:
+
+- **宿舍区**(`SZU_CTC&CMCC`):新版 eportal 网页认证,断网后自动重新登录
+- **教学区**(`SZU_WLAN`):深澜网页认证,会话失效后自动重新登录
+
+合盖 → 开盖 → 直接上网,全程无需打开浏览器、无需输入账号密码。
+
+## 🧭 工作原理
+
+```
+launchd 定时器(每 15 秒)
+   └─> autologin.sh
+         ├─ ① 认区:我现在在宿舍区还是教学区?
+         │     四级判断(由快到慢):
+         │     a. 读 SSID 比对          (零开销)
+         │     b. 按 IP 网段比对         (零开销)
+         │     c. 网关未变 → 沿用上次区域 (零开销,防"翻烙饼")
+         │     d. 探测认证服务器谁应答     (约 1~3 秒,永不失效)
+         ├─ ② 探在线:按区域询问各自的认证服务器/公网探针
+         └─ ③ 在线 → 退出;离线 → 冷却检查 → 从钥匙串取凭据 → 模拟网页登录
+```
+
+两个区域使用不同的认证协议(均已内置):
+
+| 区域 | WiFi | 认证系统 | 协议 |
+|---|---|---|---|
+| 宿舍区 | `SZU_CTC&CMCC` | 新版 eportal | 一个 GET 请求(JSONP) |
+| 教学区 | `SZU_WLAN` | 深澜 Srun(2025-01 起) | challenge → HMAC-MD5 → XXTEA 加密 → 自定义 base64 → SHA1 校验和,五道工序 |
+
+教学区还有两处自适应设计:
+
+- **ac_id 动态获取**:深澜的 `ac_id` 会随接入控制器/楼栋变化(实测见过 8、12、18,当前为 8),脚本登录前先抓登录页解析当次真实值,抓不到才回落配置值;
+- **门户入口自适应**:未登录时学校控制器会丢弃"发往认证服务器域名的 HTTPS 直连",脚本按 `域名 HTTPS → IP 直连 HTTPS → 网关 302 重定向 → IP HTTP(跟随跳转)` 的顺序逐级回退,保证拿到登录令牌(详见"版本历史"v1.2.0)。
+
+## 📦 安装
+
+### 方式一:一键安装(推荐)
+
+所有命令都在「终端」App 里执行(按 `⌘ + 空格`,搜"终端"打开)。**一次粘贴一条,粘完按回车,等它跑完再粘下一条:**
+
+**第一条**
+
+```bash
+git clone https://github.com/KKKKahn/szu-net-autologin.git
+```
+
+**第二条**
+
+```bash
+cd szu-net-autologin
+```
+
+**第三条**
+
+```bash
+chmod +x install.sh
+```
+
+**第四条**
+
+```bash
+./install.sh
+```
+
+第 4 条运行后会停下来问你:
+
+- `请输入校园网账号:` → 输你的 **6 位校园卡号**,回车
+- `请输入密码:` → 输统一身份认证密码。**屏幕上不会显示任何字符**(连 ✳ 都没有),这是防偷看的正常设计,输完直接回车
+
+之后全自动:保存账号密码到钥匙串 → 复制脚本 → 注册定时服务(每 15 秒检测)→ 自检。**深圳大学用户无需任何额外配置。**
+
+> 🔒 **安全提示**:请亲自在终端执行以上步骤,**不要把密码输入或提供给任何 AI 工具/聊天窗口**——本项目的设计就是密码只经你自己的手、只存你本机的钥匙串。
+>
+> 💡 不会用终端?装到哪一步报错了,把终端里的报错原文复制出来搜索或提问即可;每条命令本身都可以直接复制粘贴,不需要手打。
+
+### 方式二:手动安装
+
+```bash
+# ① 保存凭据到钥匙串(把引号内换成你的账号密码)
+security add-generic-password -U -s szu-portal -a "6位校园卡号" -w "统一身份认证密码"
+
+# ② 安装脚本
+mkdir -p "$HOME/Library/Application Support/SZUAutoLogin"
+cp autologin.sh config.example.sh "$HOME/Library/Application Support/SZUAutoLogin/"
+mv "$HOME/Library/Application Support/SZUAutoLogin/config.example.sh" \
+   "$HOME/Library/Application Support/SZUAutoLogin/config.sh"
+chmod +x "$HOME/Library/Application Support/SZUAutoLogin/autologin.sh"
+
+# ③ 注册定时服务(每 15 秒检测一次)
+cp com.autologin.plist.template ~/Library/LaunchAgents/com.szu.autologin.plist  # 并按文件内注释修改路径
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.szu.autologin.plist
+```
+
+### 其他学校适配
+
+只要你的学校用的是同类认证系统,改 `config.sh` 即可:
+
+- **新版 Dr.COM eportal**(登录 URL 含 `:801/eportal/portal/login`):改 `DORM_PORTAL_URL` 与 `DORM_SSIDS`;
+- **深澜 Srun**(登录页一般为 `xxx.edu.cn`,带 srun_portal 接口):改 `SRUN_BASE`、`SRUN_AC_ID`(用浏览器 F12 抓登录请求里的 `ac_id`)与 `TEACH_SSIDS`;
+- 详见 `config.example.sh` 内注释。
+
+## 🔍 日常使用
+
+```bash
+# 看实时日志(自动重连时会滚动显示)
+tail -f ~/Library/Logs/szu-autologin.log
+
+# ⚠️ 修改校园网账号/密码后必做:重新保存凭据(覆盖旧的)
+security add-generic-password -U -s szu-portal -a "新卡号" -w "新密码"
+
+# 临时停用 / 恢复
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.szu.autologin.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.szu.autologin.plist
+
+# 调整自查间隔(默认 15 秒;若想更省电可调回 30~45 秒)
+plutil -replace StartInterval -integer 15 ~/Library/LaunchAgents/com.szu.autologin.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.szu.autologin.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.szu.autologin.plist
+```
+
+成功时日志形如:
+
+```
+2026-10-08 14:31:07 检测到断网(区域: teach),尝试网页自动登录 ...
+2026-10-08 14:31:07 网页自动登录成功(教学区)
+```
+
+## 🗑️ 卸载
+
+所有命令都在「终端」App 里执行(按 `⌘ + 空格`,搜"终端"打开)。
+
+**第 1 步:进入项目文件夹**
+
+就是当初 `git clone` 时下载的那个文件夹。如果你当时按 README 的默认做法下载到了主目录:
+
+```bash
+cd ~/szu-net-autologin
+```
+
+> 不记得下载到哪了?在终端输入 `mdfind -name szu-net-autologin | head -5` 搜索,或用访达找到文件夹后,把它直接拖进终端窗口,路径会自动填上。
+
+**第 2 步:运行卸载程序**
+
+```bash
+./uninstall.sh
+```
+
+> 若提示 `Permission denied`,先执行 `chmod +x uninstall.sh` 再重试(旧版本克隆的文件可能不带执行权限)。
+
+**第 3 步:决定要不要删除保存的账号密码**
+
+脚本最后会停下问:*"是否同时删除钥匙串中保存的校园网账号密码? [y/N]"*
+
+- 按 **`y`** 键:账号密码一起删干净(以后重装需重新输入)
+- 按**其他任意键**(如回车):凭据保留,以后重装无需再输(推荐)
+
+之后脚本会显示各步结果并提示 `==== 卸载完成 ====`。
+
+**第 4 步:确认卸载成功**
+
+终端出现类似 `卸载完成` 的提示即可。可顺手验证:
+
+```bash
+launchctl list | grep szu        # 无输出 = 后台服务已停止
+ls ~/Library/LaunchAgents/com.szu.autologin.plist 2>/dev/null   # 无输出 = 配置已删除
+```
+
+**卸载内容清单**:后台定时服务、LaunchAgent 配置(`~/Library/LaunchAgents/com.szu.autologin.plist`)、脚本安装目录(`~/Library/Application Support/SZUAutoLogin/`)、(可选)钥匙串凭据。
+
+**不会自动删的**:运行日志 `~/Library/Logs/szu-autologin.log`,不想要可手动删除;以及你 clone 下来的项目文件夹本身,直接拖进废纸篓即可。
+
+卸载后 Mac 恢复原生行为:合盖/断网后需要自己打开浏览器重新登录校园网。
+
+## ⚠️ 注意事项(macOS 用户必读)
+
+1. **客户端与网页会话互斥**。若同时运行 Dr.COM 客户端,可能与网页登录互相踢下线,请二选一(本方案请卸载/退出客户端)。
+
+## ❓ FAQ
+
+<details>
+<summary>弹出"xxx 想访问钥匙串"怎么办?</summary>
+
+点「始终允许」。这是因为钥匙串条目的访问控制列表(ACL)里没有当前读取者,授权一次后即恢复正常。
+</details>
+
+<details>
+<summary>修改了校园网账号或密码怎么办?</summary>
+
+脚本不保存密码明文,凭据存在钥匙串里——所以**改密码后只需重新保存一次凭据**,不用重装:
+
+```bash
+security add-generic-password -U -s szu-portal -a "新的6位卡号" -w "新密码"
+```
+
+`-U` 表示覆盖旧条目。改完立即生效,下一轮检查就会用新凭据(账号换了也一样,改 `-a` 后面的卡号即可)。重跑一次 `install.sh` 也是等效的。
+
+</details>
+
+<details>
+<summary>想卸载这个工具怎么办?</summary>
+
+见上方 [🗑️ 卸载(新手逐步教程)](#️-卸载新手逐步教程) 一节,4 步完成,约 1 分钟。
+
+卸载后 Mac 恢复原生行为:合盖/断网后需要自己打开浏览器重新登录校园网。
+
+</details>
+
+<details>
+<summary>日志提示"账号或密码错误"?</summary>
+
+密码打错或改过密码。重新执行安装程序(或单跑 `security add-generic-password -U ...`),`-U` 参数会覆盖旧凭据。
+</details>
+
+<details>
+<summary>教学区登录一直失败:"无返回信息"/"无法获得 challenge"?</summary>
+
+v1.2.0 起教学区改为多入口逐级回退,已实测修复。若仍遇到失败,脚本会把最后一次原始返回、DNS 解析写入日志,先看日志再对症下药:
+
+- `challenge原始返回` 有内容但不是 JSON → 学校可能调整了认证接口,浏览器 F12 核对 `srun_portal` 请求参数,改 `config.sh` 中的 `SRUN_AC_ID`;
+- 显示"账号或密码错误" → 重新保存钥匙串凭据(注意 `-U` 覆盖);
+- 全部入口都报"不可达" → 多为刚切换网络的短暂状态,脚本会在 20 秒后自动快速重试;仍无法定位就开 `DEBUG_NET=1` 抓几轮日志提 issue。
+</details>
+
+## 🔒 安全与隐私
+
+- 账号密码**只存本机钥匙串**,由 macOS 全盘加密保护;脚本、配置、日志中均无明文密码;
+- 脚本只在检测到断网时向**你自己学校的认证服务器**发起登录,不连接任何第三方服务器;
+- 日志仅记录区域与结果,不含账号密码。
+
+## 📜 免责声明
+
+本项目仅供个人学习与本人在校园网内的便利使用,请遵守所在学校的网络使用规定。
+
+## 🙏 致谢
+
+- [ceynri/szu-network-connecter](https://github.com/ceynri/szu-network-connecter) —— 宿舍区新版 eportal 协议实现参考(MIT)
+- [SoY0ung/SZU-SRUN](https://github.com/SoY0ung/SZU-SRUN) —— 教学区深澜(Srun)协议 Shell 实现参考
+
+## 📜 版本历史
+
+- **v1.2.0**(2026-10-08,对应脚本 v2.9)
+  - **修复教学区登录从未成功的根因**:统计全部历史日志发现教学区 0 成功、`get_challenge` 失败 44 次。逐帧比对诊断帧确认——未登录时控制器丢弃"域名 HTTPS 直连",而旧版回退到 `http://net.szu.edu.cn` 后,认证服务器 nginx 返回"HTTP 301 强制跳 HTTPS",curl 未加 `-L` 不跟随跳转,于是永远拿不到登录令牌;
+  - 改为**多入口逐级回退**:`域名 HTTPS → IP 直连 HTTPS(172.31.63.36,实测主通道)→ 网关 302 重定向探测(改用 IP 字面量地址,不依赖 DNS)→ IP HTTP(-L 跟随 301)`;
+  - 修复 `config.sh` 从未被加载的 bug(旧版用户配置改动实际不生效);
+  - 冷却策略分级:认证服务器不可达(网络刚切换)只做 20 秒短冷却、快速重试,登录被拒才走 100 秒长冷却;
+  - ac_id 兜底值更新为当前实测值 8。
+  - ✅ 已通过"注销 → 自动登录"真机验证(一轮恢复)。
+- **v1.1.2**(2026-09-10):默认自查间隔 45 → 15 秒(实测开销可忽略,开机/唤醒后联网更快;安装程序与 plist 模板同步)
+- **v1.1.1**(2026-09-10):补充自查间隔调优指引(15 秒实测开销可忽略,开机/唤醒恢复更快);plist 模板补充重载说明
+- **v1.1.0**(2026-09-09)
+  - 修复教学区两个致命加密 bug:macOS LibreSSL `openssl md5/sha1` 输出无前缀导致取列得空、GNU 版 `expr` 不支持 `index` 导致 base64 映射失效(教学区登录失败的真凶);
+  - 教学区 ac_id 动态获取 + 兜底值修正(12 → 18);
+  - 新增门户入口自适应:注销后直连被控制器丢弃时,自动探测网关 302 重定向的真实门户入口完成登录;
+  - 区域识别防抖:实测宿舍网可同时到达两台认证服务器,新增"网关未变沿用上次区域"缓存防误判;
+  - 失败日志增强:记录服务器原始返回 / DNS 解析 / 本次 ac_id,排障不再靠猜。
+- **v1.0.1**(2026-09-09):教学区 ac_id 动态获取、区域识别防抖、补宿舍网段实测值
+- **v1.0.0**(2026-09-08):首次发布,宿舍区 + 教学区双区适配
+
+## 🧩 Windows 支持路线图
+
+当前发布的是 macOS 版(依赖 launchd 调度 + 钥匙串存凭据)。Windows 版的移植方案已经明确,但需要在 Windows 真机上联调验证后才会发布,不希望把未经测试的代码交给用户:
+
+- **运行时**:原生 PowerShell(Windows 10/11 自带,无需另装 Git Bash / WSL);
+- **加密协议**:HMAC-MD5、SHA1 用 .NET 内置能力,XXTEA 与自定义 base64 用 PowerShell 重写;
+- **凭据存储**:Windows DPAPI 加密文件(对应当前的 macOS 钥匙串方案);
+- **定时调度**:任务计划程序(登录时启动 + 每分钟重复);
+- **网络检测**:`netsh wlan show interfaces` / `Get-NetIPAddress` / `Get-NetRoute`。
+
+有 Windows 设备且愿意一起联调,或想直接贡献实现,欢迎提 issue / PR。
+
+## 📄 许可证
+
+[MIT](LICENSE)
