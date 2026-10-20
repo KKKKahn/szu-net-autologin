@@ -118,7 +118,7 @@ log_line() {
 wifi_ssid() {
   # v2.3 修复: networksetup 的输出随系统语言变化(中文系统显示
   # "当前 Wi-Fi 网络"),导致解析失败→误判区域。改用 ipconfig
-  # getsummary —— 数据键固定英文,不受系统语言影响;失败时
+  # getsummary —— 数据键固定为英文,不受系统语言影响;失败时
   # 再用 networksetup 兼容中英文前缀兜底。
   local s
   s="$(ipconfig getsummary en0 2>/dev/null | awk -F' : ' '/^[[:space:]]*SSID/{print $2; exit}')"
@@ -200,13 +200,13 @@ zone_detect() {
   if curl -s -m 4 -o /dev/null "http://172.30.255.42:801/" 2>/dev/null; then
     dormok=1; else dormok=0
   fi
-  if [[ "$dormok" == "1" && "$teachok" == "0" ]]; then
+  if [[ "$dormok" == 1 && "$teachok" == 0 ]]; then
     zone_cache_save dorm; echo "dorm"; return
   fi
-  if [[ "$dormok" == "0" && "$teachok" == "1" ]]; then
+  if [[ "$dormok" == 0 && "$teachok" == 1 ]]; then
     zone_cache_save teach; echo "teach"; return
   fi
-  if [[ "$dormok" == "1" ]]; then
+  if [[ "$dormok" == 1 ]]; then
     echo "dorm"; return
   fi
   if [[ "$WIRED_MODE" == "1" ]] && has_default_route; then
@@ -406,7 +406,7 @@ teach_ac_id() {
 
 login_teach() {
   # ① 深澜自带的在线状态接口:not_online_error 才需要登录;
-  #    v2.7: 状态接口空响应(接口抽风但能走到这里=外网已确认
+  #    v2.7: 状态接口空响应(接口抽风)但能走到这里=外网已确认
   #    不通,同样值得尝试登录,不再误判"已在线"漏登。
   local state
   state="$(curl -sk -m 8 "$SRUN_BASE/cgi-bin/rad_user_info" 2>/dev/null)"
@@ -537,7 +537,7 @@ else
     exit 0                          # 深澜确认在线
   fi
   if [[ -z "$state" ]]; then
-    online && exit 0                # 状态接口不可达 → 公网探针兜底
+    online && exit 0                # 状态接口不可达 → 公网探针兜底确认
   fi                                # not_online_error 或兜底也失败 → 继续登录
 fi
 

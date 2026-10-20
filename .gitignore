@@ -1,7 +1,18 @@
 # 日志与运行时状态(绝不入库,防止泄露个人信息)
 *.log
 .last_login
+.zone_cache
 .DS_Store
 
 # 用户个人配置(含所在学校/网段等信息)
 config.sh
+config.ps1
+
+# Windows DPAPI 加密凭据(仅当前用户可解密,绝不入库)
+cred.xml
+
+# app 构建产物(由 app/build.sh 生成,不入库)
+app/dist/
+*.zip
+app/icon/app.iconset/
+app/icon/icon_1024.png

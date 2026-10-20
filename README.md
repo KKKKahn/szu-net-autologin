@@ -9,7 +9,7 @@
 > | 平台 | 支持情况 |
 > |---|---|
 > | **macOS** | ✅ 完整支持,宿舍区 + 教学区均已实测通过 |
-> | **Windows** | ⏳ 计划中(需要 Windows 真机联调,欢迎 PR;见文末路线图) |
+> | **Windows** | ✅ 已提供原生 PowerShell 版(与 macOS 版同一套协议,加密输出已逐字节对照;但**暂未经 Windows 真机实测**,欢迎反馈) |
 
 > 一句话原理:一个小脚本定期检查网络(默认 15 秒,可在 plist 中按需调整),发现掉线就替你向认证服务器"点一次登录按钮"——账号密码只存在你本机的钥匙串里。
 
@@ -59,6 +59,19 @@ launchd 定时器(每 15 秒)
 
 - **ac_id 动态获取**:深澜的 `ac_id` 会随接入控制器/楼栋变化(实测见过 8、12、18,当前为 8),脚本登录前先抓登录页解析当次真实值,抓不到才回落配置值;
 - **门户入口自适应**:未登录时学校控制器会丢弃"发往认证服务器域名的 HTTPS 直连",脚本按 `域名 HTTPS → IP 直连 HTTPS → 网关 302 重定向 → IP HTTP(跟随跳转)` 的顺序逐级回退,保证拿到登录令牌(详见"版本历史"v1.2.0)。
+
+## ⬇️ 桌面版 app(下载即用,不用终端)
+
+不想碰命令行?下载打包好的 macOS 图标版,**双击连接校园网**:
+
+**[→ 前往 Releases 下载 SZUConnect-mac.zip](https://github.com/KKKKahn/szu-net-autologin/releases/latest)**
+
+- 解压后把 `SZUConnect.app` 拖进「应用程序」,右键 → 打开(首次需要放行一次)
+- **第一次点**会弹窗让你填一次账号密码(存本机钥匙串),之后点一下就直接连
+- Wi-Fi 关着会自动开,连的是别的网络会自动切到校园网,附近没有校园网则保持原网络不动
+- 全程不打开终端窗口,10~15 秒出结果,失败会明确告诉你原因
+
+细节与常见问题见 [app/README.md](app/README.md)。下面是从命令行的安装方式(可以两者同时用,共用同一套凭据)。
 
 ## 📦 安装
 
@@ -126,6 +139,39 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.szu.autologin.plist
 - **新版 Dr.COM eportal**(登录 URL 含 `:801/eportal/portal/login`):改 `DORM_PORTAL_URL` 与 `DORM_SSIDS`;
 - **深澜 Srun**(登录页一般为 `xxx.edu.cn`,带 srun_portal 接口):改 `SRUN_BASE`、`SRUN_AC_ID`(用浏览器 F12 抓登录请求里的 `ac_id`)与 `TEACH_SSIDS`;
 - 详见 `config.example.sh` 内注释。
+
+### Windows 安装（PowerShell）
+
+> Windows 版为**原生 PowerShell**，Windows 10 / 11 自带运行时，无需安装 Git Bash、WSL 或任何额外软件。
+>
+> ⚠️ **状态说明**：Windows 版与 macOS 版共用同一套协议，加密输出已在开发机上逐字节对照通过；但因维护者暂无 Windows 真机，**尚未在 Windows 上实测**，如遇问题欢迎提 issue（附上日志）。
+
+**第 1 步：下载项目**
+
+点本页面绿色「Code」→「Download ZIP」后解压；或用 Git：
+
+```powershell
+git clone https://github.com/KKKKahn/szu-net-autologin.git
+cd szu-net-autologin
+```
+
+**第 2 步：运行安装脚本**
+
+在项目文件夹空白处按住 `Shift` + 右键 →「在此处打开 PowerShell 窗口」，执行：
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+按提示输入 6 位校园卡号与密码（密码不显示）。安装程序会：
+
+1. 用 **DPAPI**（绑定当前 Windows 用户）加密凭据，保存到 `%LOCALAPPDATA%\SZUAutoLogin\cred.xml`；
+2. 复制脚本到 `%LOCALAPPDATA%\SZUAutoLogin`；
+3. 注册**任务计划程序**：登录时启动 + 每 1 分钟检测，后台静默运行。
+
+**卸载**：运行 `PowerShell -ExecutionPolicy Bypass -File .\uninstall.ps1`，可选择是否一并删除凭据。
+
+> 🔒 密码同样只经你自己的手、只以 DPAPI 加密存于本机；脚本、日志、仓库中均无明文密码。
 
 ## 🔍 日常使用
 
@@ -266,6 +312,19 @@ v1.2.0 起教学区改为多入口逐级回退,已实测修复。若仍遇到失
 
 ## 📜 版本历史
 
+- **v1.4.0**(2026-10-20)
+  - 新增 **macOS 桌面版 app**(`app/` 目录):把脚本包成可双击的 `.app`,不用终端、不用记命令;
+  - 首次点击弹出**原生配置窗口**填写账号密码(ObjC + AppKit 自绘圆角卡片),写入钥匙串后不再打扰;账号密码错误时可一键重新输入;
+  - app 自带一份 `autologin.sh`,**下载即用**,首次点击自动铺设到安装目录,无需 clone 仓库;
+  - 顺带把"Wi-Fi 关着""开着但连的不是校园网"这两种情况做成全自动:开射频 → 连 `SZU_WLAN` → 等 DHCP → 认证;附近没有校园网信号时保持原网络不动;
+  - 提速:刚接入的网络跳过连通性探测(离线探测必然走满超时)、按需重试替代固定 `sleep 3`、轮询粒度 0.5s→0.3s,全链路约 27s → **13~15s**;
+  - 修复非 UTF-8 locale 下 `$变量` 紧跟中文时变量名被误解析、日志出现乱码的问题(全部改为 `${变量}` 形式)。
+- **v1.3.0**(2026-10-08)
+  - 新增 **Windows 原生 PowerShell 版**:`autologin.ps1` + `install.ps1` + `uninstall.ps1` + `config.example.ps1`,双区识别与登录逻辑与 macOS 版等价;
+  - 深澜加密用**内嵌 C#** 实现(HMAC-MD5 / XXTEA / 自定义 base64 / SHA1),开发机上与 macOS 版**加密输出逐字节一致**;
+  - 凭据用 **Windows DPAPI** 加密存于 `%LOCALAPPDATA%\SZUAutoLogin\cred.xml`,调度用任务计划程序(登录启动 + 每 1 分钟);
+  - 开发中修复两个跨环境问题:GET 请求误带空 body、证书回调 ScriptBlock 在无 Runspace 线程崩溃(改为 C# 静态方法委托);
+  - ⚠️ 暂未经 Windows 真机实测,欢迎反馈。
 - **v1.2.0**(2026-10-08,对应脚本 v2.9)
   - **修复教学区登录从未成功的根因**:统计全部历史日志发现教学区 0 成功、`get_challenge` 失败 44 次。逐帧比对诊断帧确认——未登录时控制器丢弃"域名 HTTPS 直连",而旧版回退到 `http://net.szu.edu.cn` 后,认证服务器 nginx 返回"HTTP 301 强制跳 HTTPS",curl 未加 `-L` 不跟随跳转,于是永远拿不到登录令牌;
   - 改为**多入口逐级回退**:`域名 HTTPS → IP 直连 HTTPS(172.31.63.36,实测主通道)→ 网关 302 重定向探测(改用 IP 字面量地址,不依赖 DNS)→ IP HTTP(-L 跟随 301)`;
@@ -284,17 +343,17 @@ v1.2.0 起教学区改为多入口逐级回退,已实测修复。若仍遇到失
 - **v1.0.1**(2026-09-09):教学区 ac_id 动态获取、区域识别防抖、补宿舍网段实测值
 - **v1.0.0**(2026-09-08):首次发布,宿舍区 + 教学区双区适配
 
-## 🧩 Windows 支持路线图
+## 🧩 Windows 支持现状
 
-当前发布的是 macOS 版(依赖 launchd 调度 + 钥匙串存凭据)。Windows 版的移植方案已经明确,但需要在 Windows 真机上联调验证后才会发布,不希望把未经测试的代码交给用户:
+Windows 版已随 v1.3.0 发布(原生 PowerShell,Windows 10 / 11 自带运行时),实现与 macOS 版一一对应:
 
-- **运行时**:原生 PowerShell(Windows 10/11 自带,无需另装 Git Bash / WSL);
-- **加密协议**:HMAC-MD5、SHA1 用 .NET 内置能力,XXTEA 与自定义 base64 用 PowerShell 重写;
-- **凭据存储**:Windows DPAPI 加密文件(对应当前的 macOS 钥匙串方案);
-- **定时调度**:任务计划程序(登录时启动 + 每分钟重复);
+- **运行时**:原生 PowerShell 5.1(无需 Git Bash / WSL);
+- **加密协议**:HMAC-MD5、SHA1 用 .NET 内置能力,XXTEA 与自定义 base64 用内嵌 C# 实现;
+- **凭据存储**:Windows DPAPI 加密文件(对应 macOS 钥匙串方案);
+- **定时调度**:任务计划程序(登录时启动 + 每 1 分钟重复);
 - **网络检测**:`netsh wlan show interfaces` / `Get-NetIPAddress` / `Get-NetRoute`。
 
-有 Windows 设备且愿意一起联调,或想直接贡献实现,欢迎提 issue / PR。
+⚠️ 维护者暂无 Windows 真机,该版本**尚未在 Windows 上实测**(加密输出已逐字节对照)。有 Windows 设备、愿意一起联调或发现问题,欢迎提 issue / PR。
 
 ## 📄 许可证
 
