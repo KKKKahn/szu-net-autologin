@@ -218,9 +218,11 @@ zone_detect() {
 }
 
 # ---- 在线探针(区域化) ----
-# 公网探针: 作为兜底使用
+# 公网探针: 只有真正的 200 才算在线; 302/门户页/超时都不算
 online() {
-  curl -sS -m 8 -o /dev/null "$CHECK_URL" >/dev/null 2>&1
+  local code
+  code=$(curl -sS -m 8 -o /dev/null -w '%{http_code}' "$CHECK_URL" 2>/dev/null)
+  [[ "$code" == "200" ]]
 }
 
 # 宿舍区认证服务器可达性(不登录,只确认"还在校园网内、服务器活着")
@@ -516,9 +518,20 @@ login_teach() {
 }
 
 # ---- 主流程 ----
-zone="$(zone_detect)"
+# 已在线就直接退出: 避免区域误判、也避免重复登录把别的设备顶掉
+if online; then
+  exit 0
+fi
+
+# FORCE_DORM=1: 由 App 在"路由器后面/宿舍有线"时设置,跳过区域探测
+FORCE_DORM="${FORCE_DORM:-0}"
+if [[ "$FORCE_DORM" == "1" ]]; then
+  zone="dorm"
+else
+  zone="$(zone_detect)"
+fi
 if [[ "${DEBUG_NET:-0}" == "1" && "$zone" != "none" ]]; then
-  log_line "DEBUG ssid=[$(wifi_ssid)] ip=[$(ipconfig getifaddr en0 2>/dev/null)] zone=${zone}"
+  log_line "DEBUG ssid=[$(wifi_ssid)] ip=[$(ipconfig getifaddr en0 2>/dev/null)] zone=${zone} force_dorm=${FORCE_DORM}"
 fi
 [[ "$zone" == "none" ]] && exit 0   # 不在校园网环境 → 不动作
 

@@ -1,5 +1,9 @@
 # szu-net-autologin
 
+> **2026-10 更新：手动点击版 SZUConnect 1.1.0**
+> 新增一键 App：只在点击时登录，不再使用 launchd 自动重登。
+> 下载：[dist/SZUConnect.app.zip](dist/SZUConnect.app.zip) · MacBook 安装与残留排查：[MACBOOK_AGENT_INSTALL.md](MACBOOK_AGENT_INSTALL.md)
+
 **校园网断网自动重连工具(深圳大学宿舍区 + 教学区双区适配)**
 
 合盖再开、睡眠唤醒、会话超时后,**无需打开浏览器、无需输入账号密码**,后台自动完成校园网网页认证,1 分钟内恢复上网。

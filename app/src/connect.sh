@@ -20,6 +20,11 @@ CHECK_URL="https://www.baidu.com"
 SELFLOG="$HOME/Library/Logs/szu-connect-click.log"
 KC_SERVICE="szu-portal"
 
+# 家里的路由器/宿舍网络：在这个网络上点 App = 登录路由器
+HOME_SSIDS=("HUAWEI_2090")
+HOME_GATEWAY="192.168.1.1"
+AUTH_FORCE_DORM=0
+
 # app 自带一份登录脚本，首次点击时自动铺设，用户无需另外 clone 仓库
 RES_DIR="$(cd "$(dirname "$0")/../Resources" 2>/dev/null && pwd)"
 CLI_DIR="$RES_DIR/cli"
@@ -80,9 +85,9 @@ ask_redo_cred() {          # 认证失败时问是否重新输入；选"重新�
   osascript -e 'display dialog "账号或密码没有通过认证，要重新输入吗？" with title "校园网连接失败" buttons {"取消", "重新输入"} default button "重新输入" with icon caution' >/dev/null 2>&1
 }
 
-ensure_cli() {             # 登录脚本没装过就从 app 自带的 Resources 铺设一份
-  if [ -x "$SCRIPT" ]; then return 0; fi
-  plog "本地还没有登录脚本，从 app 内置副本安装到 $APP_SUPPORT"
+ensure_cli() {             # 从 app 自带副本同步；脚本更新后也能自动覆盖
+  if [ -x "$SCRIPT" ] && cmp -s "$CLI_DIR/autologin.sh" "$SCRIPT" 2>/dev/null; then return 0; fi
+  plog "同步登录脚本到 $APP_SUPPORT"
   if [ ! -f "$CLI_DIR/autologin.sh" ]; then
     alert "校园网连接" "安装包不完整（缺少登录脚本），请重新下载安装。"
     return 1
@@ -95,6 +100,15 @@ ensure_cli() {             # 登录脚本没装过就从 app 自带的 Resources
   [ -f "$CONFIG" ] || cp "$CLI_DIR/config.example.sh" "$CONFIG" 2>/dev/null
   plog "登录脚本已就位"
   return 0
+}
+
+# 停用旧的 launchd 自动重登服务：现在只保留"点一下登录一次"
+disable_auto_daemon() {
+  local plist="$HOME/Library/LaunchAgents/com.szu.autologin.plist"
+  [ -f "$plist" ] || return 0
+  plog "发现旧的自动登录服务，停用（只保留点击登录）"
+  launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || launchctl unload "$plist" 2>/dev/null || true
+  mv "$plist" "$plist.disabled" 2>/dev/null || true
 }
 
 # ---------- 在线判定 ----------
@@ -110,18 +124,30 @@ is_online() {
 # 读取当前 WiFi 名（与 autologin.sh 同款方法：ipconfig 数据键固定英文，
 # networksetup 仅在兜底时用，兼容中英文系统）
 wifi_name() {
-  local s
+  local s f
   s="$(ipconfig getsummary "$WIFI_IF" 2>/dev/null | awk -F' : ' '/^[[:space:]]*SSID/{print $2; exit}')"
+  case "$s" in *edacted*) s="" ;; esac
   if [ -n "$s" ]; then
     printf '%s' "$s"; return
   fi
-  networksetup -getairportnetwork "$WIFI_IF" 2>/dev/null \
-    | sed -n -e 's/^Current Wi-Fi Network: //p' -e 's/^当前 Wi-Fi 网络: //p' | head -1
+  f="$(networksetup -getairportnetwork "$WIFI_IF" 2>/dev/null \
+    | sed -n -e 's/^Current Wi-Fi Network: //p' -e 's/^当前 Wi-Fi 网络: //p' | head -1)"
+  case "$f" in *edacted*) f="" ;; esac
+  printf '%s' "$f"
 }
 
-wifi_name_fast() {         # 只读 ipconfig（约 0.13s），给高频轮询用；空=未关联
-  ipconfig getsummary "$WIFI_IF" 2>/dev/null \
-    | awk -F' : ' '/^[[:space:]]*SSID/{print $2; exit}'
+wifi_name_fast() {         # 先读 ipconfig；被隐私保护时退回 networksetup
+  local s
+  s="$(ipconfig getsummary "$WIFI_IF" 2>/dev/null \
+    | awk -F' : ' '/^[[:space:]]*SSID/{print $2; exit}')"
+  case "$s" in *edacted*) s="" ;; esac
+  if [ -n "$s" ]; then
+    printf '%s' "$s"; return
+  fi
+  s="$(networksetup -getairportnetwork "$WIFI_IF" 2>/dev/null \
+    | sed -n -e 's/^Current Wi-Fi Network: //p' -e 's/^当前 Wi-Fi 网络: //p' | head -1)"
+  case "$s" in *edacted*) s="" ;; esac
+  printf '%s' "$s"
 }
 
 # ---------- WiFi 控制（关着自动开、没连校园网自动切） ----------
@@ -155,6 +181,38 @@ is_campus_ssid() {
   return 1
 }
 
+is_home_ssid() {
+  local s="$1" t
+  [ -n "$s" ] || return 1
+  for t in "${HOME_SSIDS[@]}"; do [ "$s" = "$t" ] && return 0; done
+  return 1
+}
+
+default_if() { route -n get default 2>/dev/null | awk '/interface/{print $2; exit}'; }
+default_gw() { route -n get default 2>/dev/null | awk '/gateway/{print $2; exit}'; }
+if_port() {
+  networksetup -listallhardwareports 2>/dev/null | awk -v d="$1" '
+    /^Hardware Port:/{p=$0; sub(/^Hardware Port: /,"",p)}
+    /^Device:/{if ($2==d){print p; exit}}'
+}
+
+# 路由器/宿舍有线模式：Mac mini 走以太网，或 MacBook 连在家里的 HUAWEI 上。
+# 此时不碰校园 WiFi，直接以宿舍区协议登录路由器（MacBook 在 NAT 后面也能登）。
+is_router_mode() {
+  DEF_IF="$(default_if)"
+  DEF_GW="$(default_gw)"
+  DEF_PORT="$(if_port "$DEF_IF")"
+  CUR_SSID="$(wifi_name_fast)"
+  case "$CUR_SSID" in *edacted*) CUR_SSID="" ;; esac
+  [ "$DEF_PORT" = "Ethernet" ] && return 0
+  if [ -n "$CUR_SSID" ]; then
+    is_home_ssid "$CUR_SSID" && return 0
+    return 1
+  fi
+  [ -n "$DEF_GW" ] && [ "$DEF_GW" = "$HOME_GATEWAY" ] && return 0
+  return 1
+}
+
 wait_for_ip() {            # 等 DHCP 把 IP 配下来，最多 15 秒；成功返回 0
   local i ip
   for i in $(seq 1 50); do
@@ -179,8 +237,13 @@ join_ssid() {              # 连指定 SSID。注意：setairportnetwork 失败�
   esac
   for i in $(seq 1 24); do
     cur=$(wifi_name_fast)
-    if [ "$cur" = "$ssid" ]; then
-      plog "    已关联 [$ssid]，等待分配 IP"
+    # SSID 被 macOS 隐私保护读成空/<redacted> 时，用"是否拿到 IP"判断是否已关联
+    if [ "$cur" = "$ssid" ] || [ -z "$cur" ] || [[ "$cur" == *edacted* ]]; then
+      if [ "$cur" = "$ssid" ]; then
+        plog "    已关联 [$ssid]，等待分配 IP"
+      else
+        plog "    已关联（SSID 读不到，按 IP 判断）"
+      fi
       for j in $(seq 1 20); do
         ip=$(ipconfig getifaddr "$WIFI_IF" 2>/dev/null)
         [ -n "$ip" ] && { plog "    拿到 IP=${ip}，耗时约 $((j * 3 / 10)).$(( (j * 3) % 10 ))s"; return 0; }
@@ -265,7 +328,7 @@ do_auth() {
   plog "--- [3/3] 执行网页认证（脚本基线 ${before} 行）---"
   RUNOUT="/tmp/szu-connect-run-$$.out"
   run_start=$SECONDS
-  "$SCRIPT" > "$RUNOUT" 2>&1 &
+  env FORCE_DORM="$AUTH_FORCE_DORM" "$SCRIPT" > "$RUNOUT" 2>&1 &
   pid=$!
   ( sleep 75; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
   watcher=$!
@@ -306,6 +369,39 @@ report_auth_result() {
   return 0
 }
 
+# ---------- 路由器/宿舍有线模式 ----------
+router_mode() {
+  plog "--- 路由器/宿舍有线模式（接口 ${DEF_IF:-?} / ${DEF_PORT:-?}，SSID=[${CUR_SSID:-无}]，网关=${DEF_GW:-?}）---"
+  if is_online 3; then
+    plog "分支: 已在线，不重复登录"
+    notify "校园网" "已经在网了，无需重连" "Glass"
+    return 0
+  fi
+  plog "当前不在线，登录路由器（强制宿舍区）"
+  AUTH_FORCE_DORM=1
+  rm -f "$LAST_FILE" 2>/dev/null
+  do_auth
+  if report_auth_result; then
+    return 0
+  fi
+  if printf '%s' "$new" | grep -q "未就绪\|跳过本轮"; then
+    plog "分支: 网络未就绪"
+    notify "校园网" "网络尚未就绪，稍后再点一次" "Basso"
+  elif printf '%s' "$new" | grep -q "失败"; then
+    reason=$(printf '%s' "$new" | grep "失败" | tail -1 | sed 's/^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\} [0-9:]\{8\} //')
+    plog "分支: 认证失败 → ${reason}"
+    alert "校园网连接失败" "$reason"
+  else
+    plog "分支: 脚本无新增日志，复查连通性"
+    sleep 1
+    if is_online; then
+      notify "校园网" "已连接 ✓" "Glass"
+    else
+      notify "校园网" "已尝试登录，仍不在线，请再点一次" "Basso"
+    fi
+  fi
+}
+
 # ---------- 并发锁 ----------
 acquire_lock() {
   if ! mkdir "$LOCKDIR" 2>/dev/null; then
@@ -332,6 +428,7 @@ plog "################ 点击触发 $(date '+%Y-%m-%d %H:%M:%S') ###############
 
 # 1) 依赖就位：登录脚本没装过就从 app 内自带的副本铺一份
 ensure_cli || exit 1
+disable_auto_daemon
 
 # 2) 凭据：第一次点（或传 --setup 想换账号）才弹配置窗口，之后不再打扰
 if [ "${1:-}" = "--setup" ] || ! has_cred; then
@@ -348,7 +445,15 @@ if [ "${1:-}" = "--setup" ] || ! has_cred; then
   plog "凭据已保存"
 fi
 
-# 3) 抢时间：WiFi 关着就立刻开射频，不把这几百毫秒花在写日志上
+# 3) 路由器/宿舍有线模式：不碰校园 WiFi，直接登录路由器
+if is_router_mode; then
+  plog "识别为路由器/宿舍有线模式: if=${DEF_IF:-?} port=${DEF_PORT:-?} ssid=[${CUR_SSID:-无}] gw=${DEF_GW:-?}"
+  router_mode
+  exit 0
+fi
+AUTH_FORCE_DORM=0
+
+# 4) 抢时间：WiFi 关着就立刻开射频，不把这几百毫秒花在写日志上
 PRE_OFF=0
 wifi_is_on || { PRE_OFF=1; networksetup -setairportpower "$WIFI_IF" on >/dev/null 2>&1; }
 
